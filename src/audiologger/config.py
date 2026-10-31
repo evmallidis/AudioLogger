@@ -30,6 +30,9 @@ class Config:
     dictation_model: str = "medium"
     worker_prewarm: bool = True
     worker_warm_seconds: int = 600  # 10 minutes
+    # Hard cap on one recording, hours; 0 disables. A recording forgotten
+    # overnight hits this instead of running until the WAV header overflows.
+    auto_stop_hours: float = 8.0
 
 
 def _to_yaml_dict(cfg: Config) -> dict[str, Any]:

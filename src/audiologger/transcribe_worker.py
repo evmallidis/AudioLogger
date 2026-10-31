@@ -807,6 +807,33 @@ def _process_meeting_session(session_dir: Path, pipeline: WhisperXPipeline) -> N
     log.info("Wrote transcript.md and transcript.json for %s", session_dir.name)
 
 
+_worker_mutex = None  # held for the life of the process
+
+
+def _acquire_single_instance() -> bool:
+    """False if another transcription worker already runs in this session.
+
+    Two workers share one pending.txt: a second one races the first on the
+    same job, and two CUDA model loads at once can OOM the GPU.
+    """
+    global _worker_mutex
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, False, "Local\\AudioLogger.Worker")
+    if not handle:
+        log.warning("Single-instance check failed (error %s); starting anyway",
+                    ctypes.get_last_error())
+        return True
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return False
+    _worker_mutex = handle
+    return True
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="audiologger.transcribe_worker")
     parser.add_argument("state_dir", help="Path to the worker state directory")
@@ -815,6 +842,10 @@ def main(argv: list[str]) -> int:
 
     state_dir = Path(args.state_dir)
     _setup_logging(state_dir)
+
+    if not _acquire_single_instance():
+        log.info("Another transcription worker is already running; exiting")
+        return 0
 
     cfg = load_config(config_path())
     warm_idle_seconds = getattr(cfg, "worker_warm_seconds", DEFAULT_WARM_IDLE_SECONDS)

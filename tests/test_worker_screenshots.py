@@ -81,3 +81,12 @@ def test_a_recording_without_screenshots_lists_none(tmp_path):
     raw = json.loads((session / "transcript.json").read_text(encoding="utf-8"))
     assert raw["screenshots"] == []
     assert "Screenshots" not in (session / "transcript.md").read_text(encoding="utf-8")
+
+
+def test_a_second_worker_exits_without_starting(tmp_path, monkeypatch):
+    """Two workers share pending.txt — the second must leave at once."""
+    import audiologger.transcribe_worker as tw
+
+    monkeypatch.setattr(tw, "_acquire_single_instance", lambda: False)
+
+    assert tw.main(["tw", str(tmp_path)]) == 0

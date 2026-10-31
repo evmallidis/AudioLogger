@@ -103,6 +103,17 @@ class RecordingController:
                 )
         # STOPPING: ignore
 
+    def stop(self) -> None:
+        """Stop the active recording; no-op while idle or already stopping.
+
+        The auto-stop watchdog calls this instead of toggle() because it does
+        not know the recording's mode -- and must never *start* a recording if
+        the state machine happens to sit at IDLE.
+        """
+        with self._lock:
+            if self._state is RecordingState.RECORDING:
+                self._stop()
+
     def _start(self, mode: str = "meeting") -> None:
         out = self._config.output_dir
         out.mkdir(parents=True, exist_ok=True)

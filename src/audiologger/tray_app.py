@@ -208,6 +208,12 @@ class TrayApp:
         hint = "" if field == "notification_enabled" else " Restart may be required."
         self.notifier.notify("Setting changed", f"{label} set to {state}.{hint}")
 
+    def _set_auto_stop_hours(self, value: float) -> None:
+        self.cfg.auto_stop_hours = value
+        save_config(config_path(), self.cfg)
+        label = "off" if value <= 0 else f"{value:g} hours"
+        self.notifier.notify("Setting changed", f"Auto-stop set to {label}.")
+
     def _set_device(self, value: str) -> None:
         self.cfg.device = value
         save_config(config_path(), self.cfg)
@@ -223,15 +229,16 @@ class TrayApp:
         setter: Callable[[str], None],
     ) -> Menu:
         options = ["tiny", "base", "small", "medium", "large-v3"]
-        return Menu(*[
-            MenuItem(
-                opt,
-                lambda _, value=opt: setter(value),
+
+        def item(value: str) -> MenuItem:
+            return MenuItem(
+                value,
+                lambda _icon, _item: setter(value),
                 radio=True,
-                checked=lambda _, value=opt: current() == value,
+                checked=lambda _item: current() == value,
             )
-            for opt in options
-        ])
+
+        return Menu(*[item(opt) for opt in options])
 
     def _make_bool_menu(
         self,
@@ -253,6 +260,19 @@ class TrayApp:
                 checked=lambda _: current() is False,
             ),
         )
+
+    def _make_auto_stop_menu(self) -> Menu:
+        options = [(0.0, "Off"), (4.0, "4 hours"), (8.0, "8 hours"), (12.0, "12 hours")]
+
+        def item(value: float, label: str) -> MenuItem:
+            return MenuItem(
+                label,
+                lambda _icon, _item: self._set_auto_stop_hours(value),
+                radio=True,
+                checked=lambda _item: self.cfg.auto_stop_hours == value,
+            )
+
+        return Menu(*[item(v, lbl) for v, lbl in options])
 
     def _make_device_menu(self) -> Menu:
         return Menu(
@@ -335,6 +355,10 @@ class TrayApp:
                             current=lambda: self.cfg.notification_enabled,
                             setter=lambda v: self._set_bool_setting("notification_enabled", "Notifications", v),
                         ),
+                    ),
+                    MenuItem(
+                        "Auto-stop After",
+                        self._make_auto_stop_menu(),
                     ),
                     MenuItem(
                         "Worker Pre-warm",
@@ -498,7 +522,7 @@ class TrayApp:
 
     def _status_refresh_loop(self) -> None:
         from datetime import datetime
-        long_warning_fired = False
+        reminders_sent = 0
         recording_started_at: datetime | None = None
 
         # Seed prev_finished_key from current state so we don't re-fire stale completions.
@@ -511,17 +535,15 @@ class TrayApp:
             if self.controller.state is RecordingState.RECORDING:
                 if recording_started_at is None:
                     recording_started_at = datetime.now()
-                    long_warning_fired = False
+                    reminders_sent = 0
                 elapsed = (datetime.now() - recording_started_at).total_seconds()
-                if elapsed > self.LONG_RECORDING_WARN_SECONDS and not long_warning_fired:
-                    self.notifier.notify(
-                        "Long recording",
-                        f"Recording has been running for {int(elapsed // 3600)}+ hours — still good?",
-                    )
-                    long_warning_fired = True
+                if self._auto_stop_due(elapsed):
+                    self._auto_stop_recording(elapsed)
+                else:
+                    reminders_sent = self._remind_if_long(elapsed, reminders_sent)
             else:
                 recording_started_at = None
-                long_warning_fired = False
+                reminders_sent = 0
                 s = self.queue.status()
                 if s.running:
                     self._set_icon(transcribing_icon())
@@ -537,6 +559,46 @@ class TrayApp:
                     self._handle_completion(s.last_finished)
                     prev_finished_key = current_key
             time.sleep(1.0)
+
+    # --- Forgotten-recording watchdog --------------------------------------
+
+    def _auto_stop_due(self, elapsed_s: float) -> bool:
+        cap_hours = getattr(self.cfg, "auto_stop_hours", 0.0) or 0.0
+        return cap_hours > 0 and elapsed_s >= cap_hours * 3600
+
+    def _auto_stop_recording(self, elapsed_s: float) -> None:
+        """Force-stop a recording that ran past cfg.auto_stop_hours.
+
+        Runs on the status thread; controller.stop() blocks until the capture
+        threads join, the WAVs are mixed and the session is enqueued.
+        """
+        log.warning("Auto-stopping a %.1f-hour recording", elapsed_s / 3600)
+        try:
+            self.controller.stop()
+        except Exception:
+            log.exception("Auto-stop failed")
+            self.notifier.notify(
+                "Auto-stop failed",
+                "The recording could not be stopped — see tray.log.",
+            )
+            return
+        self.notifier.notify(
+            "Recording auto-stopped",
+            f"Recording ran for {elapsed_s / 3600:.1f} hours and was "
+            "stopped automatically. Transcribing now.",
+        )
+        self._set_icon(transcribing_icon())
+
+    def _remind_if_long(self, elapsed_s: float, reminders_sent: int) -> int:
+        """Toast at LONG_RECORDING_WARN_SECONDS, then hourly; returns sent count."""
+        due_after = self.LONG_RECORDING_WARN_SECONDS + reminders_sent * 3600
+        if elapsed_s <= due_after:
+            return reminders_sent
+        self.notifier.notify(
+            "Long recording",
+            f"Recording has been running for {int(elapsed_s // 3600)}+ hours — still good?",
+        )
+        return reminders_sent + 1
 
     def _handle_completion(self, payload: dict) -> None:
         mode = payload.get("mode", "meeting")

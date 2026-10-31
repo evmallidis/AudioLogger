@@ -205,6 +205,22 @@ def test_dictation_mode_passes_mic_only_true(cfg):
     assert ctrl._current_capture.mic_only is False
 
 
+def test_stop_method_stops_recording_without_knowing_the_mode(controller, cfg):
+    """The auto-stop watchdog calls stop(): it must work for any mode."""
+    controller.toggle(mode="dictation")
+    controller.stop()
+    assert controller.state is RecordingState.IDLE
+    session = cfg.output_dir / "2026-05-18_14-32-15"
+    controller._enqueue_fn.assert_called_once_with(session)
+
+
+def test_stop_method_is_a_noop_when_idle(controller):
+    """stop() must never *start* a recording the way a mistimed toggle() could."""
+    controller.stop()
+    assert controller.state is RecordingState.IDLE
+    assert controller._enqueue_fn.call_count == 0
+
+
 def test_hotkey_of_different_mode_during_recording_ignored(controller, cfg):
     """Toggling a different mode during recording is silently ignored."""
     controller.toggle(mode="meeting")  # start meeting recording

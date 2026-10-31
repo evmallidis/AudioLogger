@@ -80,6 +80,7 @@ First launch writes `%APPDATA%/AudioLogger/config.yaml`. Edit it directly, or us
 | `notification_enabled`  | `true`                 | Windows toast notifications. The tray switch applies at once — handy when sharing your screen |
 | `worker_prewarm`        | `true`                 | Load transcription models when tray starts (~3-5 GB VRAM, ~15 s startup). Set `false` to lazy-load. |
 | `worker_warm_seconds`   | `600`                  | Seconds the worker stays alive idle between jobs. Lower = less VRAM held, higher = faster repeat transcriptions. Set very large for "always warm". |
+| `auto_stop_hours`       | `8`                    | Hard cap on one recording, in hours; `0` disables. A recording left running overnight is stopped automatically and still transcribed. |
 
 ## Run
 

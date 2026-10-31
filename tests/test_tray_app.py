@@ -224,6 +224,64 @@ def test_retranscribe_with_only_the_active_recording_does_nothing(retry_app, tmp
     assert retry_app.notifier.calls, "the user should hear why nothing happened"
 
 
+# --- forgotten-recording watchdog ----------------------------------------------------
+
+def test_long_recording_reminder_fires_at_three_hours_then_hourly(app):
+    """One toast at 3 h used to be the whole defence — it must repeat hourly."""
+    assert app._remind_if_long(2.9 * 3600, 0) == 0
+    assert app.notifier.calls == []
+
+    assert app._remind_if_long(3.1 * 3600, 0) == 1
+    assert "still good" in app.notifier.calls[0]["message"]
+
+    # Nothing between reminders.
+    assert app._remind_if_long(3.5 * 3600, 1) == 1
+    assert app._remind_if_long(4.1 * 3600, 1) == 2
+    assert len(app.notifier.calls) == 2
+
+
+def test_auto_stop_due_respects_the_configured_cap(app):
+    app.cfg.auto_stop_hours = 8.0
+    assert not app._auto_stop_due(7.9 * 3600)
+    assert app._auto_stop_due(8.0 * 3600)
+
+
+def test_auto_stop_due_never_fires_when_disabled(app):
+    app.cfg.auto_stop_hours = 0.0
+    assert not app._auto_stop_due(100 * 3600)
+
+
+def test_auto_stop_stops_the_recording_and_tells_the_user(app):
+    class FakeController:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+
+    app.controller = FakeController()
+    app.icon = None
+
+    app._auto_stop_recording(8.5 * 3600)
+
+    assert app.controller.stop_calls == 1
+    assert app.notifier.calls[0]["title"] == "Recording auto-stopped"
+    assert "8.5 hours" in app.notifier.calls[0]["message"]
+
+
+def test_auto_stop_menu_click_sets_the_hours():
+    chosen: list[float] = []
+    a = TrayApp.__new__(TrayApp)
+    a.cfg = Config()
+    a._set_auto_stop_hours = chosen.append
+    menu = a._make_auto_stop_menu()
+    items = {item.text: item for item in menu.items}
+
+    items["4 hours"](object())
+
+    assert chosen == [4.0]
+
+
 # --- screenshots ---------------------------------------------------------------------
 
 def test_screenshot_toast_names_the_screenshot_and_the_moment(app):
@@ -446,3 +504,19 @@ def test_recovery_keeps_the_marker_when_the_session_cannot_be_queued(tmp_path):
     _orphan_app(tmp_path, broken_enqueue)._handle_orphaned_sessions()
 
     assert (session / MARKER_FILENAME).exists(), "the next start tries again"
+
+# --- model submenu ---------------------------------------------------------------------
+# pystray calls a 2-arg action as action(icon, item): a `value=opt` default in the
+# second slot got overwritten by the MenuItem, which then reached save_config.
+
+def test_model_menu_click_passes_the_model_name():
+    chosen: list[str] = []
+    menu = TrayApp._make_model_menu(
+        TrayApp.__new__(TrayApp), current=lambda: "medium", setter=chosen.append
+    )
+    items = {item.text: item for item in menu.items}
+
+    items["small"](object())  # what pystray does on click
+
+    assert chosen == ["small"]
+    assert items["medium"].checked and not items["small"].checked

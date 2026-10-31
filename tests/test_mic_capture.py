@@ -192,3 +192,22 @@ def test_a_mono_device_is_recorded_as_is(tmp_path):
     assert pa.open_kwargs["channels"] == 1
     samples = np.frombuffer(read_wav(tmp_path / "mic.wav")["data"], dtype=np.int16)
     assert samples[0] == 1234
+
+
+def test_activity_cb_receives_every_chunk(tmp_path):
+    import numpy as np
+
+    stop = threading.Event()
+    loud = np.full(48000, 5000, dtype=np.int16).tobytes()
+    pa = FakePyAudio(chunks=[loud], stop_event=stop, channels=1)
+    seen: list[np.ndarray] = []
+
+    record_microphone(
+        tmp_path / "mic.wav", 48000, stop,
+        pa_factory=lambda: pa,
+        activity_cb=seen.append,
+    )
+
+    assert len(seen) >= 1
+    rms = float(np.sqrt(np.mean(seen[0].astype(np.float32) ** 2)))
+    assert rms > 1000

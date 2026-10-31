@@ -193,6 +193,7 @@ def record_microphone(
     sample_rate: int,
     stop_event: threading.Event,
     *,
+    activity_cb: Callable[[np.ndarray], None] | None = None,
     pa_factory: Callable[[], Any] | None = None,
     clock: Callable[[], float] = time.monotonic,
     settle_s: float = 2.0,
@@ -264,6 +265,8 @@ def record_microphone(
                         break
                     continue
                 mono = _to_mono(data, channels)
+                if activity_cb is not None:
+                    activity_cb(np.frombuffer(mono, dtype=np.int16))
                 wav.writeframes(mono)
                 written += len(mono) // 2
                 captured += len(mono) // 2

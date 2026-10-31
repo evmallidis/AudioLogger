@@ -28,6 +28,9 @@ CHUNK_SECONDS = 1
 # often the list of output devices is checked for one plugged in meanwhile.
 RECONNECT_SECONDS = 2
 DEVICE_POLL_SECONDS = 5
+# int16 RMS that counts as "audio" for the silence watchdog. Below a muted
+# room's noise floor (~150-300), above digital silence; speech runs 1000+.
+ACTIVITY_RMS_INT16 = 500
 
 
 def _clock(seconds: float) -> str:
@@ -139,6 +142,7 @@ class AudioCaptureThread:
         self._watch_thread: threading.Thread | None = None
         self._sys_thread: threading.Thread | None = None
         self._started_at = 0.0
+        self._last_activity = 0.0
         self.warnings: list[str] = []
         # Recorded for transcript header
         self.mic_device_name: str | None = None
@@ -149,6 +153,7 @@ class AudioCaptureThread:
         sys_path = self._session_dir / "system.wav"
         self._stop.clear()
         self._started_at = time.monotonic()
+        self._last_activity = time.monotonic()
 
         t_mic = threading.Thread(
             target=self._run_mic, args=(mic_path,), name="audio-mic", daemon=True
@@ -190,7 +195,9 @@ class AudioCaptureThread:
         mix format (common on USB headsets) -- see mic_capture for details.
         """
         try:
-            result = record_microphone(out_path, self._sr, self._stop)
+            result = record_microphone(
+                out_path, self._sr, self._stop, activity_cb=self._track_activity
+            )
         except MicrophoneNotAvailable as e:
             log.warning("No mic available: %s", e)
             self.warnings.append(f"Microphone not available: {e}")
@@ -246,6 +253,21 @@ class AudioCaptureThread:
         """Samples since start(), by the wall clock."""
         return int((time.monotonic() - self._started_at) * self._sr)
 
+    def _track_activity(self, samples_i16: np.ndarray) -> None:
+        """Remember the last moment any track carried more than a noise floor.
+
+        Every capture thread feeds its one-second chunks here; the silence
+        watchdog reads seconds_since_activity() to spot a recording that was
+        left running after the meeting ended.
+        """
+        a = samples_i16.astype(np.float32)
+        if a.size and float(np.sqrt(np.mean(a * a))) > ACTIVITY_RMS_INT16:
+            self._last_activity = time.monotonic()
+
+    def seconds_since_activity(self) -> float:
+        """Seconds since the loudest track last carried audio above the floor."""
+        return time.monotonic() - self._last_activity
+
     def _watch_devices(self) -> None:
         """Loop back a headset plugged in after the recording started, too."""
         while not self._stop.wait(DEVICE_POLL_SECONDS):
@@ -273,7 +295,9 @@ class AudioCaptureThread:
                             writer.dropouts[-1] = (writer.dropouts[-1][0], at / self._sr)
                         opened = True
                         while not self._stop.is_set():
-                            writer.write(_to_int16(rec.record(numframes=self._sr * CHUNK_SECONDS)))
+                            chunk = _to_int16(rec.record(numframes=self._sr * CHUNK_SECONDS))
+                            self._track_activity(chunk)
+                            writer.write(chunk)
                 except Exception:
                     # One device failing must not take the others down with it.
                     if not opened:
@@ -335,7 +359,10 @@ class AudioCaptureThread:
         the default device alone, or a call on a headset is lost (2026-09-28).
         """
         try:
-            record_app_loopback(out_path, self._app_names, self._sr, self._stop)
+            record_app_loopback(
+                out_path, self._app_names, self._sr, self._stop,
+                activity_cb=self._track_activity,
+            )
             return
         except ProcessLoopbackAborted:
             at = _clock(self._position() / self._sr)

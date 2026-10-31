@@ -214,6 +214,12 @@ class TrayApp:
         label = "off" if value <= 0 else f"{value:g} hours"
         self.notifier.notify("Setting changed", f"Auto-stop set to {label}.")
 
+    def _set_silence_minutes(self, value: float) -> None:
+        self.cfg.auto_stop_silence_minutes = value
+        save_config(config_path(), self.cfg)
+        label = "off" if value <= 0 else f"{value:g} minutes of silence"
+        self.notifier.notify("Setting changed", f"Auto-stop on silence set to {label}.")
+
     def _set_device(self, value: str) -> None:
         self.cfg.device = value
         save_config(config_path(), self.cfg)
@@ -270,6 +276,19 @@ class TrayApp:
                 lambda _icon, _item: self._set_auto_stop_hours(value),
                 radio=True,
                 checked=lambda _item: self.cfg.auto_stop_hours == value,
+            )
+
+        return Menu(*[item(v, lbl) for v, lbl in options])
+
+    def _make_silence_menu(self) -> Menu:
+        options = [(0.0, "Off"), (15.0, "15 minutes"), (30.0, "30 minutes"), (60.0, "60 minutes")]
+
+        def item(value: float, label: str) -> MenuItem:
+            return MenuItem(
+                label,
+                lambda _icon, _item: self._set_silence_minutes(value),
+                radio=True,
+                checked=lambda _item: self.cfg.auto_stop_silence_minutes == value,
             )
 
         return Menu(*[item(v, lbl) for v, lbl in options])
@@ -359,6 +378,10 @@ class TrayApp:
                     MenuItem(
                         "Auto-stop After",
                         self._make_auto_stop_menu(),
+                    ),
+                    MenuItem(
+                        "Auto-stop on Silence",
+                        self._make_silence_menu(),
                     ),
                     MenuItem(
                         "Worker Pre-warm",
@@ -539,6 +562,8 @@ class TrayApp:
                 elapsed = (datetime.now() - recording_started_at).total_seconds()
                 if self._auto_stop_due(elapsed):
                     self._auto_stop_recording(elapsed)
+                elif self._silence_stop_due():
+                    self._silence_stop_recording()
                 else:
                     reminders_sent = self._remind_if_long(elapsed, reminders_sent)
             else:
@@ -567,12 +592,35 @@ class TrayApp:
         return cap_hours > 0 and elapsed_s >= cap_hours * 3600
 
     def _auto_stop_recording(self, elapsed_s: float) -> None:
-        """Force-stop a recording that ran past cfg.auto_stop_hours.
+        """Force-stop a recording that ran past cfg.auto_stop_hours."""
+        self._stop_and_report(
+            f"Auto-stopping a {elapsed_s / 3600:.1f}-hour recording",
+            f"Recording ran for {elapsed_s / 3600:.1f} hours and was "
+            "stopped automatically. Transcribing now.",
+        )
 
-        Runs on the status thread; controller.stop() blocks until the capture
-        threads join, the WAVs are mixed and the session is enqueued.
-        """
-        log.warning("Auto-stopping a %.1f-hour recording", elapsed_s / 3600)
+    def _silence_stop_due(self) -> bool:
+        mins = getattr(self.cfg, "auto_stop_silence_minutes", 0.0) or 0.0
+        if mins <= 0:
+            return False
+        idle = self.controller.recording_idle_seconds()
+        return idle is not None and idle >= mins * 60
+
+    def _silence_stop_recording(self) -> None:
+        """Force-stop when every track stayed under the noise floor — the
+        meeting clearly ended and the recording was left running."""
+        idle = self.controller.recording_idle_seconds() or 0.0
+        mins = round(idle / 60)
+        self._stop_and_report(
+            f"Auto-stopping recording: no audio for {mins} minutes",
+            f"No audio captured for {mins} minutes — recording stopped. "
+            "Transcribing now.",
+        )
+
+    def _stop_and_report(self, log_line: str, toast_body: str) -> None:
+        """Runs on the status thread; controller.stop() blocks until the capture
+        threads join, the WAVs are mixed and the session is enqueued."""
+        log.warning(log_line)
         try:
             self.controller.stop()
         except Exception:
@@ -582,11 +630,7 @@ class TrayApp:
                 "The recording could not be stopped — see tray.log.",
             )
             return
-        self.notifier.notify(
-            "Recording auto-stopped",
-            f"Recording ran for {elapsed_s / 3600:.1f} hours and was "
-            "stopped automatically. Transcribing now.",
-        )
+        self.notifier.notify("Recording auto-stopped", toast_body)
         self._set_icon(transcribing_icon())
 
     def _remind_if_long(self, elapsed_s: float, reminders_sent: int) -> int:

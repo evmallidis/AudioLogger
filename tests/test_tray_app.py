@@ -520,3 +520,67 @@ def test_model_menu_click_passes_the_model_name():
 
     assert chosen == ["small"]
     assert items["medium"].checked and not items["small"].checked
+
+
+# --- silence watchdog ------------------------------------------------------------
+
+def _idle_controller(seconds):
+    return type("C", (), {"recording_idle_seconds": staticmethod(lambda: seconds)})()
+
+
+def test_silence_stop_due_when_all_tracks_quiet_past_the_limit(app):
+    app.cfg.auto_stop_silence_minutes = 30.0
+    app.controller = _idle_controller(31 * 60)
+    assert app._silence_stop_due()
+
+
+def test_silence_stop_not_due_while_audio_is_flowing(app):
+    app.cfg.auto_stop_silence_minutes = 30.0
+    app.controller = _idle_controller(5 * 60)
+    assert not app._silence_stop_due()
+
+
+def test_silence_stop_disabled_by_zero(app):
+    app.cfg.auto_stop_silence_minutes = 0.0
+    app.controller = _idle_controller(999 * 60)
+    assert not app._silence_stop_due()
+
+
+def test_silence_stop_not_due_when_capture_cannot_report(app):
+    app.cfg.auto_stop_silence_minutes = 30.0
+    app.controller = _idle_controller(None)
+    assert not app._silence_stop_due()
+
+
+def test_silence_stop_stops_the_recording_and_tells_the_user(app):
+    class FakeController:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def recording_idle_seconds(self):
+            return 31 * 60
+
+        def stop(self):
+            self.stop_calls += 1
+
+    app.controller = FakeController()
+    app.icon = None
+
+    app._silence_stop_recording()
+
+    assert app.controller.stop_calls == 1
+    assert app.notifier.calls[0]["title"] == "Recording auto-stopped"
+    assert "31 minutes" in app.notifier.calls[0]["message"]
+
+
+def test_silence_menu_click_sets_the_minutes():
+    chosen: list[float] = []
+    a = TrayApp.__new__(TrayApp)
+    a.cfg = Config()
+    a._set_silence_minutes = chosen.append
+    menu = a._make_silence_menu()
+    items = {item.text: item for item in menu.items}
+
+    items["15 minutes"](object())
+
+    assert chosen == [15.0]

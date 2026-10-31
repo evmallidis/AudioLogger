@@ -125,3 +125,41 @@ def test_says_so_when_the_microphone_never_came_back(tmp_path, monkeypatch):
     cap._run_mic(tmp_path / "mic.wav")
 
     assert "did not come back" in cap.warnings[0]
+
+
+# --- activity tracking (silence watchdog) --------------------------------------
+
+def test_a_loud_chunk_marks_activity(tmp_path):
+    import time
+    import numpy as np
+
+    cap = make_capture(tmp_path)
+    cap._last_activity = time.monotonic() - 100
+
+    cap._track_activity(np.full(48000, 5000, dtype=np.int16))
+
+    assert cap.seconds_since_activity() < 5
+
+
+def test_a_quiet_chunk_does_not_mark_activity(tmp_path):
+    import time
+    import numpy as np
+
+    cap = make_capture(tmp_path)
+    cap._last_activity = time.monotonic() - 100
+
+    cap._track_activity(np.zeros(48000, dtype=np.int16))
+    cap._track_activity(np.full(48000, 150, dtype=np.int16))  # room tone, not speech
+
+    assert cap.seconds_since_activity() > 50
+
+
+def test_idle_time_counts_from_recording_start(tmp_path):
+    import time
+
+    cap = make_capture(tmp_path)
+    cap._stop.clear()
+    cap._started_at = time.monotonic()
+    cap._last_activity = time.monotonic()
+
+    assert 0 <= cap.seconds_since_activity() < 5

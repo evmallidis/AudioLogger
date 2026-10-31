@@ -33,6 +33,9 @@ class Config:
     # Hard cap on one recording, hours; 0 disables. A recording forgotten
     # overnight hits this instead of running until the WAV header overflows.
     auto_stop_hours: float = 8.0
+    # Stop early when every track stayed silent this many minutes — the
+    # meeting ended and the recording was left running. 0 disables.
+    auto_stop_silence_minutes: float = 30.0
 
 
 def _to_yaml_dict(cfg: Config) -> dict[str, Any]:

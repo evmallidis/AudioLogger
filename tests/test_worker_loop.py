@@ -16,6 +16,9 @@ def env(tmp_path, monkeypatch):
                 Config(output_dir=tmp_path / "recs", worker_warm_seconds=0))
     monkeypatch.setattr(tw, "_setup_logging", lambda d: None)
     monkeypatch.setattr(tw, "POLL_INTERVAL_SECONDS", 0.0)
+    # The single-instance mutex is a process boundary — in-process test runs
+    # call main() repeatedly and must not trip it.
+    monkeypatch.setattr(tw, "_acquire_single_instance", lambda: True)
     state = tmp_path / "state"
     state.mkdir()
     return state

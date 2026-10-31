@@ -555,3 +555,21 @@ def test_two_starts_at_once_record_only_once(cfg):
 
     # The second press stops the first recording instead of starting another.
     assert len(started) == 1
+
+
+# --- recording_idle_seconds (silence watchdog probe) ----------------------------
+
+def test_recording_idle_seconds_reports_the_capture_probe(controller):
+    controller.toggle()
+    controller._current_capture.seconds_since_activity = lambda: 42.0
+    assert controller.recording_idle_seconds() == 42.0
+
+
+def test_recording_idle_seconds_is_none_while_idle(controller):
+    assert controller.recording_idle_seconds() is None
+
+
+def test_recording_idle_seconds_is_none_without_a_probe(controller):
+    """Captures that cannot report activity must not trip the watchdog."""
+    controller.toggle()
+    assert controller.recording_idle_seconds() is None

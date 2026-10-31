@@ -7,7 +7,9 @@ import logging
 import threading
 import wave
 from pathlib import Path
+from typing import Callable
 
+import numpy as np
 import psutil  # for pid lookup by name
 
 
@@ -52,6 +54,8 @@ def record_app_loopback(
     app_names: list[str],
     sample_rate: int,
     stop_event: threading.Event,
+    *,
+    activity_cb: Callable[[np.ndarray], None] | None = None,
 ) -> None:
     """Record per-app loopback to `out_path` (16-bit mono PCM)."""
     if not _HAS_PYAUDIOWPATCH:
@@ -122,6 +126,8 @@ def record_app_loopback(
                 except Exception as e:
                     log.exception("Process-loopback read failed")
                     raise ProcessLoopbackAborted(str(e)) from e
+                if activity_cb is not None:
+                    activity_cb(np.frombuffer(data, dtype=np.int16))
                 wav.writeframes(data)
     finally:
         # Each step on its own: with the device gone, stop_stream() raises too,

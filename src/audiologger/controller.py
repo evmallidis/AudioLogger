@@ -25,6 +25,7 @@ class CaptureLike(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def seconds_since_activity(self) -> float: ...
 
 
 CaptureFactory = Callable[[Path, int, str, list[str], bool], CaptureLike]
@@ -80,6 +81,15 @@ class RecordingController:
     def current_session(self) -> Path | None:
         """Folder of the recording in progress, or None while idle."""
         return self._current_session
+
+    def recording_idle_seconds(self) -> float | None:
+        """Seconds since any capture track last saw audio; None while idle
+        or when the capture cannot tell (older fakes in tests)."""
+        capture = self._current_capture
+        if self._state is not RecordingState.RECORDING or capture is None:
+            return None
+        probe = getattr(capture, "seconds_since_activity", None)
+        return probe() if callable(probe) else None
 
     @property
     def state(self) -> RecordingState:
